@@ -1,0 +1,131 @@
+# -----------------------------------------------------------------------------
+# Endor Labs Baseline Scan (baseline branch) — parallel scoped monorepo scans
+#
+# What this workflow does:
+# - Triggers on every push + workflow_dispatch (manual run).
+# - Executes the baseline scan ONLY when the pushed branch matches:
+#     ENDOR_BASELINE_BRANCH (GitHub Actions variable), or else the repo’s
+#     default branch (github.event.repository.default_branch).
+#
+# - Runs multiple scoped scans in parallel using a matrix to keep wall-clock
+#   time down in monorepos.
+# - Uses --include-path / --exclude-path to scope each scan. Endor recommends
+#   scoping monorepo scans by changed paths (e.g., ui/**). :contentReference[oaicite:0]{index=0}
+# - (Optional) Uploads SARIF output to GitHub Code Scanning.
+#
+# REQUIRED GitHub Actions Variables (Repo/Org → Settings → Secrets and variables → Actions → Variables):
+# - ENDOR_NAMESPACE
+#     Your Endor Labs tenant namespace.
+#
+# OPTIONAL GitHub Actions Variables:
+# - ENDOR_BASELINE_BRANCH
+#     Branch name used as your baseline/default (e.g., "main", "develop").
+#     If not set, falls back to the repo default branch.
+#
+# Auth (recommended):
+# - Keyless (OIDC):
+#     - Job permissions must include: id-token: write, contents: read
+#     - Endor Labs must have an authorization policy that allows this repo/org
+#       to authenticate (keyless auth guidance is in the Endor GitHub Action docs). :contentReference[oaicite:1]{index=1}
+# -----------------------------------------------------------------------------
+name: Endor Labs - Baseline Scan (parallel scoped)
+
+on:
+  push: {}
+  workflow_dispatch: {}
+
+concurrency:
+  group: endor-baseline-${{ github.repository }}
+  cancel-in-progress: true
+
+env:
+  ENDOR_NAMESPACE: ${{ vars.ENDOR_NAMESPACE }}
+  # Used inside steps/scripts; NOT used in job-level if (to avoid the env context issue)
+  ENDOR_BASELINE_BRANCH: ${{ vars.ENDOR_BASELINE_BRANCH || github.event.repository.default_branch }}
+
+jobs:
+  baseline-scan:
+    name: Baseline scan (${{ matrix.scope.name }})
+    # IMPORTANT: Do NOT use env.* here; use vars/github directly.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == (vars.ENDOR_BASELINE_BRANCH || github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        scope:
+          # Customize these to match your monorepo layout
+          - name: backend-gradle
+            include_path: "backend/**"
+            languages: "java,kotlin"
+          - name: frontend-yarn
+            include_path: "ui/**"
+            languages: "javascript,typescript"
+
+    permissions:
+      id-token: write
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Optional toolchains (recommended if you plan to do full call-graph analysis with builds)
+      - name: Setup Java (Gradle scope)
+        if: matrix.scope.name == 'backend-gradle'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Node (Yarn scope)
+        if: matrix.scope.name == 'frontend-yarn'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup endorctl
+        uses: endorlabs/github-action/setup@1.1.4
+        with:
+          namespace: ${{ env.ENDOR_NAMESPACE }}
+          enable_github_action_token: true
+          # Optional pinning:
+          # endorctl_version: "X.Y.Z"
+
+      - name: Endor baseline scan (scoped)
+        run: |
+          echo "Baseline branch is: $ENDOR_BASELINE_BRANCH"
+
+          endorctl scan \
+            --include-path="${{ matrix.scope.include_path }}" \
+            --languages="${{ matrix.scope.languages }}" \
+            --output-type=table \
+            --sarif-file="endor-baseline-${{ matrix.scope.name }}.sarif"
+
+          # Optional additional scope tuning:
+          #   --exclude-path="docs/**"
+          #
+          # Optional performance knob (dependency resolution caching):
+          #   --use-local-repo-cache
+          #
+          # Optional: allow Endor to build if needed for full call-graph analysis:
+          #   --build
+
+      - name: Upload SARIF to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "endor-baseline-${{ matrix.scope.name }}.sarif"
+
+  baseline-summary:
+    name: Baseline summary
+    runs-on: ubuntu-latest
+    needs: [ baseline-scan ]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "Baseline scans completed (parallel scoped matrix)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch: ${{ vars.ENDOR_BASELINE_BRANCH || github.event.repository.default_branch }}" >> "$GITHUB_STEP_SUMMARY"
