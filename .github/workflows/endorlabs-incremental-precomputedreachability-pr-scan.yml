@@ -1,0 +1,104 @@
+# -----------------------------------------------------------------------------
+# Endor Labs Pull Request Scan (pull_request) — Quick Scan + precomputed reachability
+#
+# What this workflow does:
+# - Triggers on GitHub’s native pull_request events (opened/synchronize/reopened).
+# - Runs endorctl as a PR scan (point-in-time; does not affect main reporting).
+# - Uses incremental PR scanning vs a baseline branch to reduce runtime.
+# - Runs a Quick Scan (no call graph generation) PLUS enables pre-computed reachability
+#   for reachability signal without builds.
+# - Outputs a SARIF file and uploads it to GitHub Advanced Security
+# - Optional scoping if desired
+#
+# REQUIRED GitHub Actions Variables:
+# - ENDOR_NAMESPACE
+#
+# OPTIONAL GitHub Actions Variables:
+# - ENDOR_BASELINE_BRANCH
+#     Your baseline/default branch name. If not set, we use the PR base branch.
+#
+# Recommended prerequisites:
+# - Ensure the baseline branch is scanned regularly (baseline workflow on push or schedule),
+#   because incremental PR scans compare against a baseline scan.
+#
+# Auth:
+# - Keyless OIDC recommended (id-token: write, contents: read).
+# -----------------------------------------------------------------------------
+name: Endor Labs - PR Scan (quick + precomputed)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch: {}
+
+# Cancel an existing scan if the scan trigger fires while an existing scan is running
+concurrency:
+  group: endor-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENDOR_NAMESPACE: ${{ vars.ENDOR_NAMESPACE }}
+  # Prefer ENDOR_BASELINE_BRANCH if set; otherwise use PR base branch (e.g., main/develop)
+  ENDOR_PR_BASELINE_BRANCH: ${{ vars.ENDOR_BASELINE_BRANCH || github.event.pull_request.base.ref }}
+
+jobs:
+  pr-scan:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+      security-events: write
+      # pull-requests: write  # only needed if you enable PR comments via endorctl flags
+
+    steps:
+      - name: Checkout PR HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup endorctl
+        uses: endorlabs/github-action/setup@1.1.4
+        with:
+          namespace: ${{ env.ENDOR_NAMESPACE }}
+          enable_github_action_token: true
+
+      - name: Endor PR scan (incremental quick scan + precomputed reachability)
+        env:
+          # PR scan controls (env vars correspond to scan flags). :contentReference[oaicite:5]{index=5}
+          ENDOR_SCAN_PR_BASELINE: ${{ env.ENDOR_PR_BASELINE_BRANCH }}
+          ENDOR_SCAN_PR_INCREMENTAL: "true"
+          # Quick scan (no call graph generation). :contentReference[oaicite:6]{index=6}
+          ENDOR_SCAN_QUICK_SCAN: "true"
+          # Enable pre-computed reachability for quick scans. :contentReference[oaicite:7]{index=7}
+          ENDOR_SCAN_ENABLE_PRECOMPUTED_CALLGRAPHS: "true"
+
+          # Optional JS/TS speed tweak: avoid installing tsserver when call graphs aren’t needed.
+          # (Mentioned in Endor GitHub Action docs.) :contentReference[oaicite:8]{index=8}
+          # ENDOR_JS_ENABLE_TSSERVER: "false"
+        run: |
+          echo "PR baseline branch is: $ENDOR_PR_BASELINE_BRANCH"
+
+          endorctl scan --pr \
+            --output-type=table \
+            --sarif-file="endor-pr.sarif"
+
+          # ---------------------------
+          # Optional scoping (commented out):
+          #
+          # endorctl scan --pr \
+          #   --output-type=table \
+          #   --sarif-file="endor-pr.sarif" \
+          #   --include-path="ui/**" \
+          #   --exclude-path="docs/**"
+          #
+          # Optional: if you later want FULL scan on PRs (slower, most accurate):
+          #   unset ENDOR_SCAN_QUICK_SCAN
+          #   endorctl scan --pr --output-type=table --sarif-file="endor-pr.sarif" --build
+          # ---------------------------
+
+      - name: Upload SARIF to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "endor-pr.sarif"
