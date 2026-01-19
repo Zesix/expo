@@ -10,7 +10,7 @@
 # - Runs multiple scoped scans in parallel using a matrix to keep wall-clock
 #   time down in monorepos.
 # - Uses --include-path / --exclude-path to scope each scan. Endor recommends
-#   scoping monorepo scans by changed paths (e.g., ui/**). :contentReference[oaicite:0]{index=0}
+#   scoping monorepo scans by changed paths (e.g., ui/**). 
 # - (Optional) Uploads SARIF output to GitHub Code Scanning.
 #
 # REQUIRED GitHub Actions Variables (Repo/Org → Settings → Secrets and variables → Actions → Variables):
@@ -26,7 +26,7 @@
 # - Keyless (OIDC):
 #     - Job permissions must include: id-token: write, contents: read
 #     - Endor Labs must have an authorization policy that allows this repo/org
-#       to authenticate (keyless auth guidance is in the Endor GitHub Action docs). :contentReference[oaicite:1]{index=1}
+#       to authenticate (keyless auth guidance is in the Endor GitHub Action docs). 
 # -----------------------------------------------------------------------------
 name: Endor Labs - Baseline Scan (parallel scoped)
 
