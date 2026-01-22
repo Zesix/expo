@@ -44,8 +44,8 @@ on:
       - packages/expo-server/**
       - yarn.lock
       - '!**.md'
-  schedule:
-    - cron: 0 14 * * *
+  #schedule:
+  #  - cron: 0 14 * * *
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
